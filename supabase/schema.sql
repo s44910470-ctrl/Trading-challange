@@ -101,6 +101,9 @@ create table if not exists public.notifications (
 create index if not exists participants_competition_idx on public.participants(competition_id);
 create index if not exists deals_participant_time_idx on public.mt5_deals(participant_id, deal_time_server desc);
 create index if not exists snapshots_participant_time_idx on public.account_snapshots(participant_id, received_at desc);
+alter table public.notifications add column if not exists dedupe_key text;
+create unique index if not exists notifications_participant_dedupe_unique
+  on public.notifications(participant_id, dedupe_key);
 create index if not exists notifications_created_idx on public.notifications(created_at desc);
 
 alter table public.competitions enable row level security;
@@ -120,8 +123,7 @@ create or replace view public.leaderboard_public as
 select p.id, p.display_name, p.last_balance, p.last_equity, p.starting_balance,
        p.last_seen, (p.is_connected and p.last_seen > now() - interval '2 minutes') as is_connected
 from public.participants p
-join public.competitions c on c.id = p.competition_id
-where c.status <> 'completed';
+join public.competitions c on c.id = p.competition_id;
 
 create or replace view public.trade_feed_public as
 select d.id, p.display_name, d.symbol, d.deal_type, d.entry_type, d.volume,
@@ -129,7 +131,7 @@ select d.id, p.display_name, d.symbol, d.deal_type, d.entry_type, d.volume,
        to_timestamp(d.deal_time_server) as deal_time
 from public.mt5_deals d join public.participants p on p.id = d.participant_id
 join public.competitions c on c.id = p.competition_id
-where c.status <> 'completed' and d.is_balance_operation = false;
+where d.is_balance_operation = false;
 
 create or replace view public.notifications_public as
 select n.id, coalesce(p.display_name, 'System') as display_name,

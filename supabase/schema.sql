@@ -146,3 +146,56 @@ grant select on public.leaderboard_public, public.trade_feed_public, public.noti
 -- insert into public.participants (competition_id,display_name,expected_login,expected_server)
 -- values ('YOUR_COMPETITION_UUID','You','YOUR_MT5_LOGIN','ZuperiorFX-Limited'),
 --        ('YOUR_COMPETITION_UUID','Friend','FRIEND_MT5_LOGIN','ZuperiorFX-Limited');
+
+-- Secure public dashboard views: use invoker privileges and expose only safe fields.
+-- RLS is enabled above; these read policies expose competition display data only.
+drop policy if exists "public_read_competition_for_arena" on public.competitions;
+create policy "public_read_competition_for_arena"
+on public.competitions for select to anon, authenticated using (true);
+
+drop policy if exists "public_read_participant_display_for_arena" on public.participants;
+create policy "public_read_participant_display_for_arena"
+on public.participants for select to anon, authenticated using (true);
+
+drop policy if exists "public_read_deal_feed_for_arena" on public.mt5_deals;
+create policy "public_read_deal_feed_for_arena"
+on public.mt5_deals for select to anon, authenticated using (true);
+
+drop policy if exists "public_read_notifications_for_arena" on public.notifications;
+create policy "public_read_notifications_for_arena"
+on public.notifications for select to anon, authenticated using (true);
+
+grant select (id) on public.competitions to anon, authenticated;
+grant select (id, competition_id, display_name, last_balance, last_equity, starting_balance, last_seen, is_connected)
+  on public.participants to anon, authenticated;
+grant select (id, participant_id, symbol, deal_type, entry_type, volume, price, profit, commission, swap, deal_time_server, is_balance_operation)
+  on public.mt5_deals to anon, authenticated;
+grant select (id, participant_id, severity, title, message, created_at)
+  on public.notifications to anon, authenticated;
+
+create or replace view public.leaderboard_public
+with (security_invoker = true) as
+select p.id, p.display_name, p.last_balance, p.last_equity, p.starting_balance,
+       p.last_seen, (p.is_connected and p.last_seen > now() - interval '2 minutes') as is_connected
+from public.participants p
+join public.competitions c on c.id = p.competition_id;
+
+create or replace view public.trade_feed_public
+with (security_invoker = true) as
+select d.id, p.display_name, d.symbol, d.deal_type, d.entry_type, d.volume,
+       d.price, (d.profit + d.commission + d.swap) as profit,
+       to_timestamp(d.deal_time_server) as deal_time
+from public.mt5_deals d
+join public.participants p on p.id = d.participant_id
+join public.competitions c on c.id = p.competition_id
+where d.is_balance_operation = false;
+
+create or replace view public.notifications_public
+with (security_invoker = true) as
+select n.id, coalesce(p.display_name, 'System') as display_name,
+       n.severity, n.title, n.message, n.created_at, false as acknowledged
+from public.notifications n
+left join public.participants p on p.id = n.participant_id;
+
+grant select on public.leaderboard_public, public.trade_feed_public, public.notifications_public to anon, authenticated;
+

@@ -111,8 +111,8 @@ void SendSnapshot() {
 }
 
 int OnInit() {
-   if(PollSeconds < 5) PollSeconds = 5;
-   EventSetTimer(PollSeconds);
+   int timerSeconds = (int)MathMax(5, PollSeconds);
+   EventSetTimer(timerSeconds);
    Print("Zuperior monitor started. This EA does not place, modify or close trades.");
    SendSnapshot();
    return INIT_SUCCEEDED;

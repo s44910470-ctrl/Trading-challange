@@ -69,7 +69,7 @@ This project is a static Next.js export suitable for GitHub Pages.
 1. In repository Settings → Pages, select “GitHub Actions” as the source.
 2. In Settings → Secrets and variables → Actions → Variables, add:
    - `NEXT_PUBLIC_SUPABASE_URL` = Supabase project URL
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` = Supabase anon/public key
+   - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` = Supabase anon/public key
 3. The workflow deploys when you push to `main`. The website refreshes database views every 10 seconds.
 
 The dashboard uses public, read-only SQL views that omit MT5 login IDs and connector-token data. Keep the service-role key secret; it must only exist inside Supabase's server-side function environment.
@@ -94,3 +94,11 @@ where id = 'YOUR_COMPETITION_UUID' and status = 'running';
 - The initial implementation flags reported balance/credit/charge operations for human review. It is not a tamper-proof anti-cheat system.
 - Test both accounts with tiny demo trades before the official challenge.
 - This is an independent demo leaderboard, not an official Zuperior broker integration.
+
+
+## 7. GitHub Pages public configuration
+In GitHub repository Settings → Secrets and variables → Actions → Variables, add:
+- `NEXT_PUBLIC_SUPABASE_URL` = the project's API URL.
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` = the project's `sb_publishable_...` key.
+
+These are public browser credentials and are safe to put in `NEXT_PUBLIC_` variables. Never use the Supabase secret key or service-role key here. After saving variables, rerun the Pages workflow so Next.js embeds the public values in the exported site.

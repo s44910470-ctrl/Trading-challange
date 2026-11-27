@@ -1,0 +1,4 @@
+project_id = "zuperior-trading-arena"
+
+[functions.mt5-ingest]
+verify_jwt = false

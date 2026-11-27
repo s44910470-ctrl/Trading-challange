@@ -12,6 +12,13 @@ const n = (v: unknown, name: string) => {
   if (!Number.isFinite(x)) throw new Error("Invalid " + name);
   return x;
 };
+async function notifyOnce(db: any, participantId: string, severity: "info" | "warning" | "violation",
+  title: string, message: string, dedupeKey: string) {
+  const { error } = await db.from("notifications").upsert({
+    participant_id: participantId, severity, title, message, dedupe_key: dedupeKey
+  }, { onConflict: "participant_id,dedupe_key", ignoreDuplicates: true });
+  if (error) throw new Error("Could not save notification: " + error.message);
+}
 
 Deno.serve(async req => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -33,7 +40,7 @@ Deno.serve(async req => {
   const db = createClient(url, key, { auth: { persistSession: false } });
   const { data: connector } = await db.from("connector_tokens").select("participant_id").eq("token_hash", await hash(token)).is("revoked_at", null).maybeSingle();
   if (!connector) return reply({ error: "Invalid or revoked connector token" }, 401);
-  const { data: p } = await db.from("participants").select("id,competition_id,expected_login,expected_server,display_name").eq("id", connector.participant_id).single();
+  const { data: p } = await db.from("participants").select("id,competition_id,expected_login,expected_server,display_name,starting_balance,last_seen").eq("id", connector.participant_id).single();
   if (!p) return reply({ error: "Participant missing" }, 404);
   const account = payload.account;
   if (String(account.login) !== p.expected_login || String(account.server) !== p.expected_server) return reply({ error: "Account does not match assigned participant" }, 403);
@@ -43,7 +50,8 @@ Deno.serve(async req => {
   if (!competition || competition.status === "completed") return reply({ error: "Competition is not accepting updates" }, 409);
   const now = new Date();
   if (competition.status === "running" && competition.ends_at && now > new Date(competition.ends_at)) {
-    await db.from("notifications").insert({ participant_id: p.id, severity: "violation", title: "Update received after deadline", message: "MT5 connector sent data after the competition deadline." });
+    await notifyOnce(db, p.id, "violation", "Update received after deadline",
+      "MT5 connector sent data after the competition deadline.", "connector-update-after-deadline");
     return reply({ error: "Competition deadline has passed" }, 409);
   }
 
@@ -51,6 +59,11 @@ Deno.serve(async req => {
   try { balance = n(account.balance, "balance"); equity = n(account.equity, "equity"); }
   catch (e) { return reply({ error: (e as Error).message }, 400); }
   if (balance < 0 || equity < 0) return reply({ error: "Invalid account totals" }, 400);
+  if (!p.last_seen && Math.abs(balance - Number(p.starting_balance ?? 50)) > 0.01) {
+    await notifyOnce(db, p.id, "violation", "Starting balance mismatch",
+      `First MT5 snapshot reported ${balance.toFixed(2)}; agreed starting balance is ${Number(p.starting_balance ?? 50).toFixed(2)}. Review before starting.`,
+      "initial-start-balance");
+  }
 
   const deals = payload.deals.map((d: any) => ({
     participant_id: p.id, deal_ticket: String(d.ticket), order_ticket: String(d.order_ticket ?? ""),
@@ -61,13 +74,17 @@ Deno.serve(async req => {
     swap: n(d.swap ?? 0, "swap"), comment: String(d.comment ?? "").slice(0, 120),
     deal_time_server: n(d.time ?? 0, "deal time"), is_balance_operation: d.is_balance_operation === true
   }));
-  if (deals.some((d: any) => d.is_balance_operation)) {
-    await db.from("notifications").insert({ participant_id: p.id, severity: "violation", title: "Balance operation detected", message: "An MT5 balance/credit operation was reported. Admin review is required." });
+  for (const deal of deals.filter((d: any) => d.is_balance_operation)) {
+    await notifyOnce(db, p.id, "violation", "Balance operation detected",
+      `MT5 history reported a balance/credit/charge operation (deal ${deal.deal_ticket}). Admin review is required.`,
+      `balance-operation-${deal.deal_ticket}`);
   }
   if (competition.status === "running" && competition.starts_at) {
     const start = Math.floor(new Date(competition.starts_at).getTime() / 1000);
-    if (deals.some((d: any) => d.time > 0 && d.time < start)) {
-      await db.from("notifications").insert({ participant_id: p.id, severity: "warning", title: "Historical deals received", message: "Older MT5 history was synchronized. Only deals within the official competition window should be considered." });
+    if (deals.some((d: any) => d.deal_time_server > 0 && d.deal_time_server < start)) {
+      await notifyOnce(db, p.id, "warning", "Historical deals synchronized",
+        "Older MT5 history was received. Check broker-server time against the official challenge window before counting these deals.",
+        "historical-deals-sync");
     }
   }
 

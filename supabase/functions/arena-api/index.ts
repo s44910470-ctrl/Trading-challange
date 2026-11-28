@@ -180,6 +180,10 @@ async function getRiskSnapshot(db: any, participantId: string, quote: Quote | nu
     .select("realized_profit").eq("participant_id", participantId).eq("status", "closed")
     .is("archived_at", null).gte("closed_at", dayStart.toISOString());
   if (dailyError) throw dailyError;
+  const { data: recentEvents, error: eventsError } = await db.from("paper_risk_events")
+    .select("id,event_type,message,details,created_at").eq("participant_id", participantId)
+    .order("created_at", { ascending: false }).limit(10);
+  if (eventsError) throw eventsError;
 
   let floating = 0, marginUsed = 0, openPositions = 0, pendingOrders = 0, totalLots = 0;
   for (const trade of active || []) {
@@ -232,6 +236,7 @@ async function getRiskSnapshot(db: any, participantId: string, quote: Quote | nu
       total_open_lots: Number(totalLots.toFixed(3)),
     },
     blocked_reasons: blockedReasons,
+    recent_events: recentEvents || [],
     day_reset_timezone: "UTC",
   };
 }
@@ -616,11 +621,14 @@ Deno.serve(async req => {
       }
       if (stop !== null) {
         const plannedRisk = Math.abs(referencePrice - stop) * contractSize * lots;
-        const { data: equityAccount } = await db.from("paper_accounts")
+        const { data: equityAccount, error: equityError } = await db.from("paper_accounts")
           .select("balance").eq("participant_id", member.participant_id).single();
-        const openRiskTrades = await db.from("paper_trades").select("side,lots,entry_price,status")
-          .eq("participant_id", member.participant_id).eq("status", "open").is("archived_at", null);
-        const openFloating = (openRiskTrades.data || []).reduce((sum: number, t: any) => {
+        if (equityError || !equityAccount) throw equityError || new Error("Paper account not found");
+        const { data: openRiskTrades, error: openRiskError } = await db.from("paper_trades")
+          .select("side,lots,entry_price,status").eq("participant_id", member.participant_id)
+          .eq("status", "open").is("archived_at", null);
+        if (openRiskError) throw openRiskError;
+        const openFloating = (openRiskTrades || []).reduce((sum: number, t: any) => {
           if (t.entry_price == null) return sum;
           return sum + unrealized(t, quote);
         }, 0);

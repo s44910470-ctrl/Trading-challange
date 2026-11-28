@@ -39,6 +39,25 @@ OANDA availability and account/API eligibility depend on region and the user's O
 ### TradingView chart
 The Terminal has a TradingView chart embed for \`OANDA:XAUUSD\` plus a separate Arena candle chart. TradingView's charting libraries/widgets do not themselves provide a market-data API. The embedded chart is an independent visual reference; simulator order validation and fills use the server-side quote returned by OANDA (when configured) or XAUS. The two displays can differ because of source, cache and timing differences.
 
+## Paper risk controls
+
+The current participant profiles are created additively in `public.paper_risk_profiles`; audit events are stored in `public.paper_risk_events`. Both tables have RLS enabled and no direct access for anonymous or authenticated browser roles. The invite-authenticated `arena-api` Edge Function reads and writes them server-side.
+
+Default risk profile for each existing participant:
+- Maximum planned loss per trade: **2% of current account equity**.
+- Daily loss cap: **5% of starting balance**.
+- Maximum total loss from starting balance: **10%**.
+- Maximum open positions plus pending orders: **3**.
+- Maximum total active volume: **0.05 lots**.
+- Maximum projected margin utilization: **90% of current equity**.
+- Stop Loss is **required** on every new order.
+
+Daily risk uses realized P&L from trades closed since 00:00 UTC plus current floating P&L. Daily reset boundary is UTC. The total-loss rule compares current equity with the account's starting balance; it is not a trailing peak-to-valley drawdown calculation.
+
+The browser shows a pre-trade estimate, but the backend repeats the checks before inserting an order. A rejected risk check writes a private audit event. When daily or total loss limits are reached, new orders are blocked. Existing positions are not automatically liquidated by the risk lock; their configured SL/TP and normal close controls continue to apply when the quote refreshes.
+
+Risk defaults are stored per participant and can be changed only through future authorized admin configuration work. Do not edit rows directly unless you understand the effect on the challenge rules.
+
 ## Trading simulator behaviour
 - Market BUY fills at ask; market SELL fills at bid.
 - Open BUY positions are marked at bid; SELL positions at ask.

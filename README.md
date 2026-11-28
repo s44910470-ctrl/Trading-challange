@@ -11,6 +11,9 @@ A mobile-first, private two-player XAUUSD paper-trading competition. No broker a
 - Leverage: 1:1000.
 - Order types: market, limit and stop.
 - Optional stop loss and take profit.
+- Server-enforced risk profiles: 2% maximum risk per trade, 5% daily loss cap, 10% total loss cap, up to 3 active orders, 0.05 total lots and 90% margin utilization.
+- Stop Loss is required on new orders by default; planned risk is calculated before submission and revalidated by the Edge Function.
+- Private personal trading journal with participant ownership, strategy/setup notes and trade linking.
 - Private trade history and open positions; shared leaderboard.
 - Administrator-controlled start, pause, resume, end and reset.
 - The round remains in draft until the administrator explicitly starts it.

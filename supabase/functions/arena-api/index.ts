@@ -16,6 +16,7 @@ const number = (value: unknown, label: string) => {
   if (!Number.isFinite(parsed)) throw new Error("Invalid " + label);
   return parsed;
 };
+const cashRisk = (value: number) => "$" + Math.abs(value).toFixed(2);
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 const contractSize = 100;
 const leverage = 1000;
@@ -147,6 +148,108 @@ function maxDrawdownPct(trades: any[]) {
   }
   return Number(worst.toFixed(2));
 }
+async function getRiskProfile(db: any, participantId: string) {
+  const { data, error } = await db.from("paper_risk_profiles").select("*")
+    .eq("participant_id", participantId).maybeSingle();
+  if (error) throw error;
+  if (data) return data;
+  const { data: created, error: createError } = await db.from("paper_risk_profiles")
+    .insert({ participant_id: participantId }).select("*").single();
+  if (!createError && created) return created;
+  // A parallel first request may have created the default row after our SELECT.
+  const { data: retry, error: retryError } = await db.from("paper_risk_profiles").select("*")
+    .eq("participant_id", participantId).maybeSingle();
+  if (retryError || !retry) throw createError || retryError || new Error("Risk profile unavailable");
+  return retry;
+}
+
+async function getRiskSnapshot(db: any, participantId: string, quote: Quote | null, competition: any) {
+  const profile = await getRiskProfile(db, participantId);
+  const { data: account, error: accountError } = await db.from("paper_accounts")
+    .select("balance,starting_balance").eq("participant_id", participantId).single();
+  if (accountError || !account) throw accountError || new Error("Paper account not found");
+
+  const { data: active, error: activeError } = await db.from("paper_trades")
+    .select("side,lots,entry_price,status,trigger_price")
+    .eq("participant_id", participantId).in("status", ["open", "pending"]).is("archived_at", null);
+  if (activeError) throw activeError;
+
+  const dayStart = new Date();
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const { data: closedToday, error: dailyError } = await db.from("paper_trades")
+    .select("realized_profit").eq("participant_id", participantId).eq("status", "closed")
+    .is("archived_at", null).gte("closed_at", dayStart.toISOString());
+  if (dailyError) throw dailyError;
+
+  let floating = 0, marginUsed = 0, openPositions = 0, pendingOrders = 0, totalLots = 0;
+  for (const trade of active || []) {
+    const lots = Number(trade.lots || 0);
+    totalLots += lots;
+    marginUsed += (quote?.mid || 0) * contractSize * lots / leverage;
+    if (trade.status === "pending") pendingOrders++;
+    if (trade.status === "open") {
+      openPositions++;
+      if (quote && trade.entry_price != null) floating += unrealized(trade, quote);
+    }
+  }
+  const balance = Number(account.balance);
+  const startingBalance = Number(account.starting_balance);
+  const equity = balance + floating;
+  const dailyRealized = (closedToday || []).reduce((sum: number, row: any) => sum + Number(row.realized_profit || 0), 0);
+  const dailyPnl = dailyRealized + floating;
+  const totalPnl = equity - startingBalance;
+  const dailyLossLimit = startingBalance * Number(profile.max_daily_loss_pct) / 100;
+  const totalLossLimit = startingBalance * Number(profile.max_total_drawdown_pct) / 100;
+  const blockedReasons: string[] = [];
+  if (dailyPnl <= -dailyLossLimit) blockedReasons.push("Daily loss limit reached");
+  if (totalPnl <= -totalLossLimit) blockedReasons.push("Maximum account drawdown reached");
+  if (!profile.enabled) blockedReasons.push("Risk controls are disabled for this account");
+
+  return {
+    enabled: Boolean(profile.enabled),
+    can_trade: blockedReasons.length === 0 && competition.status === "running" && !competition.is_paused,
+    profile: {
+      max_risk_per_trade_pct: Number(profile.max_risk_per_trade_pct),
+      max_daily_loss_pct: Number(profile.max_daily_loss_pct),
+      max_total_drawdown_pct: Number(profile.max_total_drawdown_pct),
+      max_open_positions: Number(profile.max_open_positions),
+      max_total_lots: Number(profile.max_total_lots),
+      max_margin_pct: Number(profile.max_margin_pct),
+      require_stop_loss: Boolean(profile.require_stop_loss),
+    },
+    metrics: {
+      balance: Number(balance.toFixed(2)),
+      equity: Number(equity.toFixed(2)),
+      floating_pnl: Number(floating.toFixed(2)),
+      daily_pnl: Number(dailyPnl.toFixed(2)),
+      daily_loss_limit: Number(dailyLossLimit.toFixed(2)),
+      total_pnl: Number(totalPnl.toFixed(2)),
+      total_loss_limit: Number(totalLossLimit.toFixed(2)),
+      margin_used: Number(marginUsed.toFixed(2)),
+      margin_pct: equity > 0 ? Number((marginUsed / equity * 100).toFixed(2)) : 0,
+      open_positions: openPositions,
+      pending_orders: pendingOrders,
+      total_open_lots: Number(totalLots.toFixed(3)),
+    },
+    blocked_reasons: blockedReasons,
+    day_reset_timezone: "UTC",
+  };
+}
+
+async function recordRiskEvent(db: any, participantId: string, competitionId: string, eventType: string, message: string, details: Record<string, unknown> = {}) {
+  try {
+    await db.from("paper_risk_events").insert({
+      participant_id: participantId,
+      competition_id: competitionId,
+      event_type: eventType,
+      message,
+      details,
+    });
+  } catch {
+    // Risk rejection must still be returned even if audit storage is temporarily unavailable.
+  }
+}
+
 async function buildState(db: any, member: Member) {
   const competition = await getCompetition(db);
   const quote = await getQuote(db);
@@ -193,7 +296,7 @@ async function buildState(db: any, member: Member) {
       margin_used: Number((marginMap.get(p.id) || 0).toFixed(2)),
     };
   }).sort((a: any, b: any) => b.return_pct - a.return_pct || a.drawdown_pct - b.drawdown_pct);
-  let me: any = null, myTrades: any[] = [];
+  let me: any = null, myTrades: any[] = [], risk: any = null;
   if (member.participant_id) {
     me = leaderboard.find((p: any) => p.id === member.participant_id) || null;
     const { data: rows, error: tradeError } = await db.from("paper_trades").select("*")
@@ -201,9 +304,10 @@ async function buildState(db: any, member: Member) {
       .order("created_at", { ascending: false }).limit(100);
     if (tradeError) throw tradeError;
     myTrades = rows || [];
+    risk = await getRiskSnapshot(db, member.participant_id, quote, competition);
   }
   return {
-    role: member.role, me, leaderboard, myTrades, quote,
+    role: member.role, me, leaderboard, myTrades, quote, risk,
     competition: {
       id: competition.id, name: competition.name, status: competition.status,
       is_paused: Boolean(competition.is_paused), starts_at: competition.starts_at,
@@ -445,6 +549,23 @@ Deno.serve(async req => {
       if (take !== null && ((trade.side === "BUY" && take <= referencePrice) || (trade.side === "SELL" && take >= referencePrice))) {
         return reply({ error: "Take Profit must be above a Buy entry and below a Sell entry." }, 400);
       }
+      const riskProfile = await getRiskProfile(db, member.participant_id);
+      if (riskProfile.require_stop_loss && stop === null) {
+        return reply({ error: "A Stop Loss is required by this account's risk profile." }, 400);
+      }
+      if (stop !== null) {
+        const { data: account } = await db.from("paper_accounts").select("balance")
+          .eq("participant_id", member.participant_id).single();
+        const riskEquity = Math.max(0, Number(account?.balance || 0));
+        const plannedRisk = Math.abs(referencePrice - stop) * contractSize * Number(trade.lots);
+        const riskCap = riskEquity * Number(riskProfile.max_risk_per_trade_pct) / 100;
+        if (plannedRisk > riskCap + 0.000001) {
+          await recordRiskEvent(db, member.participant_id, trade.competition_id, "risk_per_trade_limit",
+            "Position protection change exceeded the maximum risk per trade.",
+            { trade_id: trade.id, planned_risk: plannedRisk, allowed_risk: riskCap });
+          return reply({ error: "This Stop Loss would risk more than the account limit. Move it closer to entry." }, 400);
+        }
+      }
       const updatePayload = trade.status === "pending"
         ? { stop_loss: stop, take_profit: take, trigger_price: trigger }
         : { stop_loss: stop, take_profit: take };
@@ -482,13 +603,94 @@ Deno.serve(async req => {
         if (orderType === "LIMIT" && ((side === "BUY" && trigger >= quote.mid) || (side === "SELL" && trigger <= quote.mid))) return reply({ error: "Limit price is on the wrong side of the current market." }, 400);
         if (orderType === "STOP" && ((side === "BUY" && trigger <= quote.mid) || (side === "SELL" && trigger >= quote.mid))) return reply({ error: "Stop price is on the wrong side of the current market." }, 400);
       }
-      const { data: account, error: accountError } = await db.from("paper_accounts").select("balance").eq("participant_id", member.participant_id).single();
+      const riskProfile = await getRiskProfile(db, member.participant_id);
+      if (!riskProfile.enabled) {
+        await recordRiskEvent(db, member.participant_id, competition.id, "risk_controls_disabled",
+          "Order rejected because risk controls are disabled.");
+        return reply({ error: "Trading is locked because risk controls are disabled for this account." }, 403);
+      }
+      if (riskProfile.require_stop_loss && stop === null) {
+        await recordRiskEvent(db, member.participant_id, competition.id, "missing_stop_loss",
+          "Order rejected because a Stop Loss is required.");
+        return reply({ error: "Set a Stop Loss before placing this order. Your account requires protected trades." }, 400);
+      }
+      if (stop !== null) {
+        const plannedRisk = Math.abs(referencePrice - stop) * contractSize * lots;
+        const { data: equityAccount } = await db.from("paper_accounts")
+          .select("balance").eq("participant_id", member.participant_id).single();
+        const openRiskTrades = await db.from("paper_trades").select("side,lots,entry_price,status")
+          .eq("participant_id", member.participant_id).eq("status", "open").is("archived_at", null);
+        const openFloating = (openRiskTrades.data || []).reduce((sum: number, t: any) => {
+          if (t.entry_price == null) return sum;
+          return sum + unrealized(t, quote);
+        }, 0);
+        const equity = Math.max(0, Number(equityAccount?.balance || 0) + openFloating);
+        const riskCap = equity * Number(riskProfile.max_risk_per_trade_pct) / 100;
+        if (plannedRisk > riskCap + 0.000001) {
+          await recordRiskEvent(db, member.participant_id, competition.id, "risk_per_trade_limit",
+            "Order rejected because planned Stop Loss risk exceeds the per-trade limit.",
+            { planned_risk: plannedRisk, allowed_risk: riskCap, lots, reference_price: referencePrice, stop_loss: stop });
+          return reply({ error: "Planned loss at Stop Loss is " + cashRisk(plannedRisk) + "; account limit is " + cashRisk(riskCap) + ". Reduce volume or move the Stop Loss closer." }, 400);
+        }
+      }
+      const { data: account, error: accountError } = await db.from("paper_accounts")
+        .select("balance,starting_balance").eq("participant_id", member.participant_id).single();
       if (accountError || !account) return reply({ error: "Paper account not found" }, 404);
-      const { data: active } = await db.from("paper_trades").select("lots,status")
-        .eq("participant_id", member.participant_id).in("status", ["open", "pending"]).is("archived_at", null);
+      const { data: active, error: activeError } = await db.from("paper_trades")
+        .select("side,lots,status,entry_price").eq("participant_id", member.participant_id)
+        .in("status", ["open", "pending"]).is("archived_at", null);
+      if (activeError) throw activeError;
+      const openCount = (active || []).filter((t: any) => t.status === "open").length;
+      const pendingCount = (active || []).filter((t: any) => t.status === "pending").length;
+      const activeCount = openCount + pendingCount;
+      const activeLots = (active || []).reduce((sum: number, t: any) => sum + Number(t.lots), 0);
+      const currentFloating = (active || []).filter((t: any) => t.status === "open")
+        .reduce((sum: number, t: any) => sum + (t.entry_price == null ? 0 : unrealized(t, quote)), 0);
+      const equity = Number(account.balance) + currentFloating;
+      const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+      const { data: todayClosed, error: todayError } = await db.from("paper_trades")
+        .select("realized_profit").eq("participant_id", member.participant_id).eq("status", "closed")
+        .is("archived_at", null).gte("closed_at", today.toISOString());
+      if (todayError) throw todayError;
+      const dailyRealized = (todayClosed || []).reduce((sum: number, t: any) => sum + Number(t.realized_profit || 0), 0);
+      const dailyPnl = dailyRealized + currentFloating;
+      const dailyLossCap = Number(account.starting_balance) * Number(riskProfile.max_daily_loss_pct) / 100;
+      const totalPnl = equity - Number(account.starting_balance);
+      const totalLossCap = Number(account.starting_balance) * Number(riskProfile.max_total_drawdown_pct) / 100;
+      if (dailyPnl <= -dailyLossCap) {
+        await recordRiskEvent(db, member.participant_id, competition.id, "daily_loss_limit",
+          "Order rejected because the daily loss limit has been reached.",
+          { daily_pnl: dailyPnl, daily_loss_limit: dailyLossCap });
+        return reply({ error: "Daily loss limit reached. New orders are locked until the next UTC day." }, 403);
+      }
+      if (totalPnl <= -totalLossCap) {
+        await recordRiskEvent(db, member.participant_id, competition.id, "max_drawdown_limit",
+          "Order rejected because the maximum account drawdown was reached.",
+          { total_pnl: totalPnl, max_loss: totalLossCap });
+        return reply({ error: "Maximum account drawdown reached. New orders are locked for this round." }, 403);
+      }
+      if (openCount >= Number(riskProfile.max_open_positions)) {
+        await recordRiskEvent(db, member.participant_id, competition.id, "max_open_positions",
+          "Order rejected because the maximum open position count was reached.",
+          { open_positions: openCount, max_open_positions: riskProfile.max_open_positions });
+        return reply({ error: "Maximum open position count reached." }, 400);
+      }
+      if (activeLots + lots > Number(riskProfile.max_total_lots) + 0.000001) {
+        await recordRiskEvent(db, member.participant_id, competition.id, "max_total_lots",
+          "Order rejected because total active lot exposure would exceed the limit.",
+          { active_lots: activeLots, requested_lots: lots, max_total_lots: riskProfile.max_total_lots });
+        return reply({ error: "Total active volume limit is " + Number(riskProfile.max_total_lots).toFixed(3) + " lots. Reduce volume or close an existing position." }, 400);
+      }
       const reserved = (active || []).reduce((sum: number, t: any) => sum + quote.mid * contractSize * Number(t.lots) / leverage, 0);
       const required = quote.mid * contractSize * lots / leverage;
-      if (reserved + required > Number(account.balance) * 0.95) return reply({ error: "Insufficient free margin for this lot size. Reduce volume." }, 400);
+      const marginPct = equity > 0 ? (reserved + required) / equity * 100 : Infinity;
+      if (marginPct > Number(riskProfile.max_margin_pct)) {
+        await recordRiskEvent(db, member.participant_id, competition.id, "max_margin_limit",
+          "Order rejected because projected margin utilization would exceed the risk profile.",
+          { projected_margin_pct: marginPct, max_margin_pct: riskProfile.max_margin_pct });
+        return reply({ error: "Projected margin usage is " + marginPct.toFixed(1) + "%; maximum allowed is " + Number(riskProfile.max_margin_pct).toFixed(1) + "%. Reduce volume." }, 400);
+      }
+      if (reserved + required > equity * 0.95) return reply({ error: "Insufficient free margin for this lot size. Reduce volume." }, 400);
       const { data: inserted, error: insertError } = await db.from("paper_trades").insert({
         competition_id: competition.id, participant_id: member.participant_id, side, order_type: orderType,
         status: orderType === "MARKET" ? "open" : "pending", lots, trigger_price: orderType === "MARKET" ? null : trigger,

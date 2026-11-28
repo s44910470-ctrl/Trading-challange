@@ -57,6 +57,14 @@ The repository and live Supabase project were inspected before writing this road
 - The TradingView OANDA:XAUUSD chart is an independent visual reference and can differ from the simulator execution quote.
 - Pending orders and SL/TP are evaluated when the backend refreshes a quote. This is not an exchange-grade matching engine.
 
+### Recently implemented
+
+- [x] Additive risk profile and audit tables for both existing participants.
+- [x] Default server-enforced risk checks: 2% per-trade loss, 5% daily loss, 10% total loss from starting balance, three active orders, 0.05 total lots, 90% projected margin utilization and required Stop Loss.
+- [x] Pre-trade risk preview and participant Risk control centre with recent private risk events.
+- [x] Risk checks repeated in the Edge Function before paper-order insertion.
+- [ ] Add regression tests and concurrency-safe order placement before increasing exposure limits.
+
 ### Current live service status at roadmap creation
 
 - `arena-api` Edge Function: active, version 5.

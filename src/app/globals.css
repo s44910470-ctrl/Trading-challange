@@ -586,3 +586,29 @@ button:disabled{opacity:.45;cursor:not-allowed}
   .risk-guidance { padding:2px 12px 12px; }
   .risk-guidance p { font-size:9px; }
 }
+
+.risk-event-list { display:grid; }
+.risk-event-row {
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  padding:12px 16px;
+  border-bottom:1px solid var(--border);
+}
+.risk-event-row:last-child { border-bottom:0; }
+.risk-event-dot {
+  width:7px;
+  height:7px;
+  margin-top:4px;
+  flex:0 0 auto;
+  border-radius:50%;
+  background:var(--gold);
+  box-shadow:0 0 9px rgba(227,182,90,.3);
+}
+.risk-event-row > div { display:grid; gap:4px; min-width:0; }
+.risk-event-row b { color:var(--text); font-size:9px; line-height:1.45; }
+.risk-event-row small { color:var(--muted); font-size:8px; text-transform:capitalize; }
+@media(max-width:680px) {
+  .risk-event-row { padding:11px 12px; }
+  .risk-event-row b { font-size:8px; }
+}

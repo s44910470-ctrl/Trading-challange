@@ -99,18 +99,11 @@ function unrealized(trade: any, quote: Quote) {
 async function closeTrade(db: any, trade: any, quote: Quote, reason = "manual") {
   if (trade.status !== "open") return;
   const exit = trade.side === "BUY" ? quote.bid : quote.ask;
-  const profit = Number(((exit - Number(trade.entry_price)) * contractSize * Number(trade.lots) * (trade.side === "BUY" ? 1 : -1)).toFixed(2));
-  const { data: changed, error } = await db.from("paper_trades")
-    .update({ status: "closed", exit_price: exit, realized_profit: profit, closed_at: new Date().toISOString() })
-    .eq("id", trade.id).eq("status", "open").is("archived_at", null).select("id").maybeSingle();
+  const { error } = await db.rpc("close_paper_trade", {
+    p_trade_id: trade.id,
+    p_exit_price: exit
+  });
   if (error) throw error;
-  if (!changed) return;
-  const { data: account, error: accountError } = await db.from("paper_accounts").select("balance").eq("participant_id", trade.participant_id).single();
-  if (accountError) throw accountError;
-  const nextBalance = Math.max(0, Number(account.balance) + profit);
-  const { error: updateError } = await db.from("paper_accounts")
-    .update({ balance: nextBalance, updated_at: new Date().toISOString() }).eq("participant_id", trade.participant_id);
-  if (updateError) throw updateError;
 }
 async function settleQuote(db: any, competition: any, quote: Quote) {
   if (!quote || quote.is_stale || competition.status !== "running" || competition.is_paused) return;
@@ -311,8 +304,9 @@ Deno.serve(async req => {
       const take = body.take_profit === "" || body.take_profit == null ? null : number(body.take_profit, "take profit");
       const trigger = body.trigger_price === "" || body.trigger_price == null ? null : number(body.trigger_price, "trigger price");
       const entry = side === "BUY" ? quote.ask : quote.bid;
-      if (stop !== null && ((side === "BUY" && stop >= entry) || (side === "SELL" && stop <= entry))) return reply({ error: "Stop Loss must be below entry for Buy and above entry for Sell." }, 400);
-      if (take !== null && ((side === "BUY" && take <= entry) || (side === "SELL" && take >= entry))) return reply({ error: "Take Profit must be above entry for Buy and below entry for Sell." }, 400);
+      const referencePrice = orderType === "MARKET" ? entry : (trigger ?? entry);
+      if (stop !== null && ((side === "BUY" && stop >= referencePrice) || (side === "SELL" && stop <= referencePrice))) return reply({ error: "Stop Loss must be below the planned Buy entry and above the planned Sell entry." }, 400);
+      if (take !== null && ((side === "BUY" && take <= referencePrice) || (side === "SELL" && take >= referencePrice))) return reply({ error: "Take Profit must be above the planned Buy entry and below the planned Sell entry." }, 400);
       if (orderType !== "MARKET") {
         if (trigger === null || trigger <= 0) return reply({ error: "Enter a valid trigger price for a pending order." }, 400);
         if (orderType === "LIMIT" && ((side === "BUY" && trigger >= quote.mid) || (side === "SELL" && trigger <= quote.mid))) return reply({ error: "Limit price is on the wrong side of the current market." }, 400);

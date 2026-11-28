@@ -74,10 +74,19 @@ Deno.serve(async req => {
     swap: n(d.swap ?? 0, "swap"), comment: String(d.comment ?? "").slice(0, 120),
     deal_time_server: n(d.time ?? 0, "deal time"), is_balance_operation: d.is_balance_operation === true
   }));
-  for (const deal of deals.filter((d: any) => d.is_balance_operation)) {
-    await notifyOnce(db, p.id, "violation", "Balance operation detected",
-      `MT5 history reported a balance/credit/charge operation (deal ${deal.deal_ticket}). Admin review is required.`,
-      `balance-operation-${deal.deal_ticket}`);
+  const officialStartUtc = competition.starts_at
+    ? Math.floor(new Date(competition.starts_at).getTime() / 1000)
+    : null;
+  // Only balance operations inside the active competition window are rule violations.
+  // Older history is synced for audit but should not be treated as challenge cheating.
+  if (competition.status === "running" && officialStartUtc !== null) {
+    for (const deal of deals.filter((d: any) =>
+      d.is_balance_operation && d.deal_time_server >= officialStartUtc
+    )) {
+      await notifyOnce(db, p.id, "violation", "Balance operation detected",
+        `MT5 history reported a balance/credit/charge operation (deal ${deal.deal_ticket}). Admin review is required.`,
+        `balance-operation-${deal.deal_ticket}`);
+    }
   }
   if (competition.status === "running" && competition.starts_at) {
     const start = Math.floor(new Date(competition.starts_at).getTime() / 1000);

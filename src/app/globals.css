@@ -484,3 +484,105 @@ button:disabled{opacity:.45;cursor:not-allowed}
   .journal-fields .journal-span-2 { grid-column:span 1; }
   .journal-fields input,.journal-fields select { height:40px; }
 }
+
+
+/* Risk-control terminal components */
+.pretrade-risk-panel {
+  margin: 12px 0 13px;
+  padding: 11px 12px;
+  border: 1px solid rgba(90,105,122,.42);
+  border-radius: 11px;
+  background: linear-gradient(120deg, rgba(17,24,32,.88), rgba(15,20,28,.72));
+}
+.pretrade-risk-heading {
+  display:flex;
+  align-items:center;
+  gap:7px;
+  color:var(--gold);
+}
+.pretrade-risk-heading b { font-size:8px; letter-spacing:.13em; }
+.pretrade-risk-heading span {
+  margin-left:auto;
+  color:var(--muted);
+  font-size:7px;
+  font-weight:900;
+  letter-spacing:.09em;
+}
+.pretrade-risk-grid {
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;
+  margin-top:10px;
+}
+.pretrade-risk-grid > div {
+  display:grid;
+  gap:4px;
+  min-width:0;
+  padding:8px;
+  border:1px solid var(--border);
+  border-radius:8px;
+  background:rgba(7,11,17,.26);
+}
+.pretrade-risk-grid small {
+  color:var(--muted);
+  font-size:7px;
+  font-weight:850;
+  letter-spacing:.09em;
+}
+.pretrade-risk-grid b {
+  overflow-wrap:anywhere;
+  color:var(--text);
+  font-size:11px;
+  font-variant-numeric:tabular-nums;
+}
+.pretrade-risk-warning,.pretrade-risk-ok {
+  margin-top:9px;
+  padding:8px 9px;
+  border-radius:7px;
+  font-size:8px;
+  line-height:1.45;
+}
+.pretrade-risk-warning {
+  color:#f2c46c;
+  border:1px solid rgba(227,182,90,.24);
+  background:rgba(227,182,90,.07);
+}
+.pretrade-risk-ok {
+  color:var(--green);
+  border:1px solid rgba(40,191,133,.2);
+  background:rgba(40,191,133,.055);
+}
+.risk-rules-card {
+  overflow:hidden;
+  border-color:rgba(62,73,89,.7);
+  background:linear-gradient(145deg, rgba(19,24,33,.97), rgba(14,18,26,.98));
+}
+.risk-rule-list { padding:4px 17px 12px; }
+.risk-rule-list > div {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:14px;
+  padding:12px 0;
+  border-bottom:1px solid var(--border);
+}
+.risk-rule-list > div:last-child { border-bottom:0; }
+.risk-rule-list span { color:var(--muted2); font-size:10px; }
+.risk-rule-list b { color:var(--text); font-size:10px; text-align:right; font-variant-numeric:tabular-nums; }
+.risk-guidance { padding:2px 17px 14px; }
+.risk-guidance p { color:var(--muted2); font-size:10px; line-height:1.65; margin:9px 0; }
+.risk-guidance b { color:var(--text); }
+.risk-page .alert.warning { display:flex; gap:9px; align-items:flex-start; }
+.risk-page .alert.warning div { display:grid; gap:3px; }
+.risk-page .alert.warning span { font-size:9px; }
+@media(max-width:680px) {
+  .pretrade-risk-panel { padding:9px; margin:10px 0; }
+  .pretrade-risk-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+  .pretrade-risk-grid > div { padding:7px; }
+  .pretrade-risk-grid b { font-size:10px; }
+  .risk-rule-list { padding:3px 12px 10px; }
+  .risk-rule-list > div { padding:11px 0; gap:8px; }
+  .risk-rule-list span,.risk-rule-list b { font-size:9px; }
+  .risk-guidance { padding:2px 12px 12px; }
+  .risk-guidance p { font-size:9px; }
+}

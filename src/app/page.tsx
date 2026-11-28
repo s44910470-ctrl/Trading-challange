@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, ArrowDownRight, ArrowUpRight, BarChart3, Check, ChevronDown, Clock3,
-  Crown, Download, History, Moon, Pause, Play, RefreshCw, RotateCcw, Settings,
+  Crown, Download, History, LogOut, Moon, Pause, Play, RefreshCw, RotateCcw, Settings,
   Shield, Sun, TrendingUp, Trophy, Wallet, X, Maximize2, LineChart,
   ChartCandlestick, SlidersHorizontal
 } from "lucide-react";

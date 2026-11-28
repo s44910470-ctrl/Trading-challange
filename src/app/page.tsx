@@ -66,6 +66,7 @@ export default function Home(){
   const [state,setState]=useState<ArenaState|null>(null);
   const [candles,setCandles]=useState<Candle[]>([]);
   const [chartSource,setChartSource]=useState("");
+  const [chartMode,setChartMode]=useState<"tradingview"|"arena">("tradingview");
   const [timeframe,setTimeframe]=useState("5m");
   const [tab,setTab]=useState<Tab>("Terminal");
   const [theme,setTheme]=useState<"dark"|"light">("dark");
@@ -200,9 +201,9 @@ export default function Home(){
               <Metric label="USED MARGIN" value={cash(me?.margin_used??0)} detail={"Leverage 1:"+state.competition.leverage} icon={<BarChart3 size={17}/>}/>
             </div>
             <div className="surface chart-panel">
-              <div className="panel-heading"><div><h2>Gold market chart</h2><p>XAUUSD · reference feed candles</p></div><div className="timeframes">{["1m","5m","15m","1h","4h"].map(tf=><button key={tf} onClick={()=>setTimeframe(tf)} className={timeframe===tf?"active":""}>{tf.toUpperCase()}</button>)}</div></div>
-              <div className="chart-wrap"><CandleChart candles={candles} quote={state.quote}/></div>
-              <div className="chart-footer"><span><i className="legend-dot gold-dot"/> MID PRICE</span><span>{chartSource||"Loading chart history"}</span></div>
+              <div className="panel-heading"><div><h2>Gold market chart</h2><p>{chartMode==="tradingview"?"TradingView · OANDA:XAUUSD chart":"Arena quote-feed candles"}</p></div><div className="chart-head-controls"><div className="chart-mode-toggle"><button className={chartMode==="tradingview"?"active":""} onClick={()=>setChartMode("tradingview")}>TV</button><button className={chartMode==="arena"?"active":""} onClick={()=>setChartMode("arena")}>ARENA</button></div><div className="timeframes">{["1m","5m","15m","1h","4h"].map(tf=><button key={tf} onClick={()=>setTimeframe(tf)} className={timeframe===tf?"active":""}>{tf.toUpperCase()}</button>)}</div></div></div>
+              <div className="chart-wrap">{chartMode==="tradingview"?<iframe className="tv-frame" title="TradingView OANDA XAUUSD chart" src={"https://www.tradingview.com/widgetembed/?symbol=OANDA%3AXAUUSD&interval="+({"1m":"1","5m":"5","15m":"15","1h":"60","4h":"240"} as Record<string,string>)[timeframe]+"&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=11151d&studies=[]&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&hideideas=1&locale=en"} loading="lazy" allowFullScreen/>:<CandleChart candles={candles} quote={state.quote}/>}</div>
+              <div className="chart-footer"><span><i className="legend-dot gold-dot"/> {chartMode==="tradingview"?"TRADINGVIEW · OANDA SYMBOL":"SIMULATOR MID PRICE"}</span><span>{chartMode==="tradingview"?"Chart data is supplied by TradingView":" "+(chartSource||"Loading chart history")}</span></div>
             </div>
             <div className="surface board-panel">
               <div className="panel-heading"><div><h2>Live leaderboard</h2><p>Ranked by return percentage, drawdown as tie-breaker</p></div><span className="count-pill">2 TRADERS</span></div>

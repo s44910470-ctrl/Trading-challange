@@ -19,7 +19,7 @@ create table if not exists public.participants (
   competition_id uuid not null references public.competitions(id) on delete cascade,
   display_name text not null,
   expected_login text not null,
-  expected_server text not null default 'ZuperiorFX-Limited',
+  expected_server text not null default 'Exness-MT5Trial16',
   last_balance numeric(18,2),
   last_equity numeric(18,2),
   currency text not null default 'USD',
@@ -144,8 +144,8 @@ grant select on public.leaderboard_public, public.trade_feed_public, public.noti
 -- each participant's MT5 numeric login. Never place MT5 passwords in SQL or website code.
 -- insert into public.competitions (name) values ('Zuperior Trading Arena - 1v1') returning id;
 -- insert into public.participants (competition_id,display_name,expected_login,expected_server)
--- values ('YOUR_COMPETITION_UUID','You','YOUR_MT5_LOGIN','ZuperiorFX-Limited'),
---        ('YOUR_COMPETITION_UUID','Friend','FRIEND_MT5_LOGIN','ZuperiorFX-Limited');
+-- values ('YOUR_COMPETITION_UUID','You','YOUR_MT5_LOGIN','Exness-MT5Trial16'),
+--        ('YOUR_COMPETITION_UUID','Friend','FRIEND_MT5_LOGIN','Exness-MT5Trial16');
 
 -- Secure public dashboard views: use invoker privileges and expose only safe fields.
 -- RLS is enabled above; these read policies expose competition display data only.

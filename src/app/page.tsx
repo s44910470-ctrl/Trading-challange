@@ -11,11 +11,12 @@ import {
 type Quote={mid:number;bid:number;ask:number;spread:number;source:string;price_as_of:string;is_stale:boolean;received_at:string};
 type Trader={id:string;display_name:string;balance:number;equity:number;return_pct:number;drawdown_pct:number;margin_used:number};
 type PaperTrade={id:string;side:"BUY"|"SELL";order_type:"MARKET"|"LIMIT"|"STOP";status:"pending"|"open"|"closed"|"cancelled";lots:number;trigger_price:number|null;entry_price:number|null;exit_price:number|null;stop_loss:number|null;take_profit:number|null;realized_profit:number|null;opened_at:string|null;closed_at:string|null;created_at:string};
-type ArenaState={role:"participant"|"admin";me:Trader|null;leaderboard:Trader[];myTrades:PaperTrade[];quote:Quote|null;competition:{id:string;name:string;status:"draft"|"running"|"completed";is_paused:boolean;starts_at:string|null;ends_at:string|null;max_duration_minutes:number;completed_at:string|null;winner_metric:string;contract_size_oz:number;leverage:number};server_time:string};
+type RiskSnapshot={enabled:boolean;can_trade:boolean;profile:{max_risk_per_trade_pct:number;max_daily_loss_pct:number;max_total_drawdown_pct:number;max_open_positions:number;max_total_lots:number;max_margin_pct:number;require_stop_loss:boolean};metrics:{balance:number;equity:number;floating_pnl:number;daily_pnl:number;daily_loss_limit:number;total_pnl:number;total_loss_limit:number;margin_used:number;margin_pct:number;open_positions:number;pending_orders:number;total_open_lots:number};blocked_reasons:string[];day_reset_timezone:string};
+type ArenaState={role:"participant"|"admin";me:Trader|null;leaderboard:Trader[];myTrades:PaperTrade[];quote:Quote|null;risk:RiskSnapshot|null;competition:{id:string;name:string;status:"draft"|"running"|"completed";is_paused:boolean;starts_at:string|null;ends_at:string|null;max_duration_minutes:number;completed_at:string|null;winner_metric:string;contract_size_oz:number;leverage:number};server_time:string};
 type Candle={time:string;open:number;high:number;low:number;close:number;volume?:number};
 type JournalEntry={id:string;title:string;market:string;direction:"BUY"|"SELL"|"NO_TRADE";timeframe:string;strategy:string;setup:string;trade_date:string;entry_price:number|null;exit_price:number|null;stop_loss:number|null;take_profit:number|null;outcome:"WIN"|"LOSS"|"BREAKEVEN"|"NO_TRADE";emotion:string;discipline_score:number|null;mistakes:string[];notes:string;chart_image_url:string|null;paper_trade_id:string|null;created_at:string};
 type JournalDraft={title:string;market:string;direction:"BUY"|"SELL"|"NO_TRADE";timeframe:string;strategy:string;setup:string;trade_date:string;entry_price:string;exit_price:string;stop_loss:string;take_profit:string;outcome:"WIN"|"LOSS"|"BREAKEVEN"|"NO_TRADE";emotion:string;discipline_score:string;mistakes:string;notes:string;chart_image_url:string;paper_trade_id:string};
-type Tab="Trade"|"Performance"|"Positions"|"History"|"Journal"|"Arena"|"Settings";
+type Tab="Trade"|"Performance"|"Positions"|"History"|"Risk"|"Journal"|"Arena"|"Settings";
 const newJournalDraft=():JournalDraft=>({title:"",market:"XAUUSD",direction:"BUY",timeframe:"5m",strategy:"",setup:"",trade_date:"",entry_price:"",exit_price:"",stop_loss:"",take_profit:"",outcome:"NO_TRADE",emotion:"",discipline_score:"",mistakes:"",notes:"",chart_image_url:"",paper_trade_id:""});
 const endpoint=(process.env.NEXT_PUBLIC_SUPABASE_URL||"").replace(/\/$/,"")+"/functions/v1/arena-api";
 const apiKey=process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||"";
@@ -78,7 +79,7 @@ export default function Home(){
   const [candles,setCandles]=useState<Candle[]>([]),[chartSource,setChartSource]=useState(""),[chartMode,setChartMode]=useState<"tradingview"|"arena">("tradingview");
   const [timeframe,setTimeframe]=useState("5m"),[tab,setTab]=useState<Tab>("Trade"),[theme,setTheme]=useState<"dark"|"light">("dark");
   const [busy,setBusy]=useState(false),[refreshing,setRefreshing]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
-  const [lots,setLots]=useState("0.01"),[orderType,setOrderType]=useState<"MARKET"|"LIMIT"|"STOP">("MARKET"),[trigger,setTrigger]=useState(""),[sl,setSl]=useState(""),[tp,setTp]=useState(""),[optionsOpen,setOptionsOpen]=useState(false);
+  const [lots,setLots]=useState("0.01"),[orderType,setOrderType]=useState<"MARKET"|"LIMIT"|"STOP">("MARKET"),[trigger,setTrigger]=useState(""),[sl,setSl]=useState(""),[tp,setTp]=useState(""),[optionsOpen,setOptionsOpen]=useState(true);
   const [filter,setFilter]=useState<"all"|"open"|"pending"|"closed">("all"),[tick,setTick]=useState(Date.now()),[installPrompt,setInstallPrompt]=useState<any>(null),[chartFullscreen,setChartFullscreen]=useState(false);
   const [journalEntries,setJournalEntries]=useState<JournalEntry[]>([]);
   const [journalDraft,setJournalDraft]=useState<JournalDraft>(newJournalDraft);
@@ -105,10 +106,32 @@ export default function Home(){
   const secondsLeft=state?.competition.ends_at?Math.max(0,Math.floor((Date.parse(state.competition.ends_at)-(state.competition.is_paused?Date.parse(state.server_time):tick))/1000)):0;
   const clock=String(Math.floor(secondsLeft/3600)).padStart(2,"0")+":"+String(Math.floor(secondsLeft%3600/60)).padStart(2,"0")+":"+String(secondsLeft%60).padStart(2,"0");
   const running=state?.competition.status==="running"&&!state.competition.is_paused,isAdmin=state?.role==="admin";
+  const risk=state?.risk||null;
   const validLots=Number.isFinite(Number(lots))&&Number(lots)>=0.01&&Number(lots)<=5;
   const validTrigger=orderType==="MARKET"||(Number.isFinite(Number(trigger))&&Number(trigger)>0);
+  const riskPreview=(side:"BUY"|"SELL")=>{
+    const quote=state?.quote,qty=Number(lots),reference=orderType==="MARKET"?(side==="BUY"?quote?.ask:quote?.bid):Number(trigger);
+    const stopValue=Number(sl),hasStop=sl.trim()!==""&&Number.isFinite(stopValue)&&stopValue>0;
+    const validStop=hasStop&&reference!=null&&(side==="BUY"?stopValue<reference:stopValue>reference);
+    const plannedRisk=validStop&&state?Math.abs(Number(reference)-stopValue)*state.competition.contract_size_oz*qty:null;
+    const allowedRisk=(me?.equity||0)*(risk?.profile.max_risk_per_trade_pct||0)/100;
+    const requiredMargin=quote&&state?quote.mid*state.competition.contract_size_oz*qty/state.competition.leverage:0;
+    const projectedMarginPct=risk&&risk.metrics.equity>0?(risk.metrics.margin_used+requiredMargin)/risk.metrics.equity*100:Infinity;
+    const projectedLots=(risk?.metrics.total_open_lots||0)+qty;
+    const projectedOrders=(risk?.metrics.open_positions||0)+(risk?.metrics.pending_orders||0)+1;
+    const marginAllowed=projectedMarginPct<=(risk?.profile.max_margin_pct||0);
+    const lotsAllowed=projectedLots<=(risk?.profile.max_total_lots||0)+0.000001;
+    const positionsAllowed=projectedOrders<=(risk?.profile.max_open_positions||0);
+    const perTradeAllowed=plannedRisk!=null&&plannedRisk<=allowedRisk+0.000001;
+    const stopAllowed=!risk?.profile.require_stop_loss||validStop;
+    return {reference,plannedRisk,allowedRisk,projectedMarginPct,projectedLots,projectedOrders,marginAllowed,lotsAllowed,positionsAllowed,perTradeAllowed,stopAllowed,validStop};
+  };
+  const canPlace=(side:"BUY"|"SELL")=>{
+    const preview=riskPreview(side);
+    return !isAdmin&&busy===false&&running&&Boolean(state?.quote&&!state.quote.is_stale)&&validLots&&validTrigger&&risk?.can_trade===true&&preview.stopAllowed&&(!risk?.profile.require_stop_loss||preview.validStop)&&preview.perTradeAllowed&&preview.marginAllowed&&preview.lotsAllowed&&preview.positionsAllowed;
+  };
   const realized=closed.reduce((a,t)=>a+Number(t.realized_profit||0),0),wins=closed.filter(t=>Number(t.realized_profit||0)>0).length,losses=closed.filter(t=>Number(t.realized_profit||0)<0).length,winRate=closed.length?wins/closed.length*100:0;
-  const nav:{name:Tab;label:string;icon:React.ReactNode}[]=[{name:"Trade",label:"Trade",icon:<ChartCandlestick size={18}/>},{name:"Performance",label:"Performance",icon:<BarChart3 size={18}/>},{name:"Positions",label:"Positions",icon:<Activity size={18}/>},{name:"History",label:"History",icon:<History size={18}/>},...(isAdmin?[]:[{name:"Journal" as Tab,label:"Journal",icon:<BookOpen size={18}/>}]),{name:"Arena",label:"Arena",icon:<Trophy size={18}/>}];
+  const nav:{name:Tab;label:string;icon:React.ReactNode}[]=[{name:"Trade",label:"Trade",icon:<ChartCandlestick size={18}/>},{name:"Performance",label:"Performance",icon:<BarChart3 size={18}/>},{name:"Positions",label:"Positions",icon:<Activity size={18}/>},{name:"History",label:"History",icon:<History size={18}/>},...(isAdmin?[]:[{name:"Risk" as Tab,label:"Risk",icon:<Shield size={18}/>},{name:"Journal" as Tab,label:"Journal",icon:<BookOpen size={18}/>}]),{name:"Arena",label:"Arena",icon:<Trophy size={18}/> }];
 
   const login=async(e:React.FormEvent)=>{e.preventDefault();const value=inputCode.trim();if(!value)return;setBusy(true);setError("");try{const data=await request<ArenaState>(value,{action:"state"});sessionStorage.setItem("zuperior-arena-code",value);setCode(value);setState(data);setInputCode("");setTab("Trade");setNotice("Welcome to Zuperior Arena.");}catch(err){setError(err instanceof Error?err.message:"Invalid invite code");}finally{setBusy(false);}};
   const logout=()=>{sessionStorage.removeItem("zuperior-arena-code");setCode("");setState(null);setCandles([]);setJournalEntries([]);setJournalDraft(newJournalDraft());setJournalEditingId(null);setNotice("");setError("");setChartFullscreen(false);};
@@ -140,8 +163,18 @@ export default function Home(){
             <div className="chart-footer"><span>{chartMode==="tradingview"?"TRADINGVIEW · OANDA:XAUUSD":"ARENA REFERENCE CANDLES"}</span><span>{chartMode==="tradingview"?"Chart display is independent of simulator execution price":chartSource||"Loading candles"}</span></div>
           </div>
           {!chartFullscreen&&<div className="quick-trade-panel"><div className="quick-trade-top"><div><b>Quick trade</b><span>{orderType==="MARKET"?"Market execution":"Pending "+orderType.toLowerCase()+" order"} · Virtual funds only</span></div><div className="quick-trade-controls"><div className="quick-volume"><small>VOLUME</small><div className="volume-control"><button type="button" aria-label="Decrease lot size" onClick={()=>setLots(v=>String(Math.max(.01,Number(v)-.01).toFixed(2)))}>−</button><input aria-label="Volume in lots" type="number" inputMode="decimal" min=".01" max="5" step=".01" value={lots} onChange={e=>setLots(e.target.value)}/><button type="button" aria-label="Increase lot size" onClick={()=>setLots(v=>String(Math.min(5,Number(v)+.01).toFixed(2)))}>+</button></div></div><button className={cls("options-toggle",optionsOpen&&"active")} onClick={()=>setOptionsOpen(v=>!v)}><SlidersHorizontal size={15}/> Settings <ChevronDown size={13}/></button></div></div>
-            {optionsOpen&&<div className="order-options-grid"><label>ORDER TYPE<select value={orderType} onChange={e=>setOrderType(e.target.value as any)}><option value="MARKET">Market</option><option value="LIMIT">Limit</option><option value="STOP">Stop</option></select></label>{orderType!=="MARKET"&&<label>TRIGGER PRICE<input type="number" inputMode="decimal" step=".01" value={trigger} onChange={e=>setTrigger(e.target.value)} placeholder="Order price"/></label>}<label>STOP LOSS <small>OPTIONAL</small><input type="number" inputMode="decimal" step=".01" value={sl} onChange={e=>setSl(e.target.value)} placeholder="—"/></label><label>TAKE PROFIT <small>OPTIONAL</small><input type="number" inputMode="decimal" step=".01" value={tp} onChange={e=>setTp(e.target.value)} placeholder="—"/></label><div className="order-spec"><span>Margin est.</span><b>{state.quote?cash(state.quote.mid*100*Number(lots||0)/state.competition.leverage):"—"}</b><span>Contract</span><b>100 oz / lot</b><span>Leverage</span><b>1:{state.competition.leverage}</b></div></div>}
-            <div className="buy-sell-row"><button className="trade-action sell-action" disabled={busy||!running||!state.quote||state.quote.is_stale||!validLots||!validTrigger} onClick={()=>placeOrder("SELL")}><span>SELL</span><b>{state.quote?fmt(state.quote.bid):"—"}</b><small>{orderType==="MARKET"?"SELL XAUUSD":"PLACE SELL "+orderType}</small></button><button className="trade-action buy-action" disabled={busy||!running||!state.quote||state.quote.is_stale||!validLots||!validTrigger} onClick={()=>placeOrder("BUY")}><span>BUY</span><b>{state.quote?fmt(state.quote.ask):"—"}</b><small>{orderType==="MARKET"?"BUY XAUUSD":"PLACE BUY "+orderType}</small></button></div>
+            {optionsOpen&&<div className="order-options-grid"><label>ORDER TYPE<select value={orderType} onChange={e=>setOrderType(e.target.value as any)}><option value="MARKET">Market</option><option value="LIMIT">Limit</option><option value="STOP">Stop</option></select></label>{orderType!=="MARKET"&&<label>TRIGGER PRICE<input type="number" inputMode="decimal" step=".01" value={trigger} onChange={e=>setTrigger(e.target.value)} placeholder="Order price"/></label>}<label>STOP LOSS <small>{risk?.profile.require_stop_loss?"REQUIRED":"OPTIONAL"}</small><input type="number" inputMode="decimal" step=".01" value={sl} onChange={e=>setSl(e.target.value)} placeholder="Set protective stop"/></label><label>TAKE PROFIT <small>OPTIONAL</small><input type="number" inputMode="decimal" step=".01" value={tp} onChange={e=>setTp(e.target.value)} placeholder="—"/></label><div className="order-spec"><span>Margin est.</span><b>{state.quote?cash(state.quote.mid*100*Number(lots||0)/state.competition.leverage):"—"}</b><span>Contract</span><b>100 oz / lot</b><span>Leverage</span><b>1:{state.competition.leverage}</b></div></div>}
+            <div className="pretrade-risk-panel">
+              <div className="pretrade-risk-heading"><Shield size={15}/><b>PRE-TRADE RISK CHECK</b><span>{risk?.can_trade?"RISK CONTROLS ACTIVE":"ORDERS LOCKED"}</span></div>
+              <div className="pretrade-risk-grid">
+                <div><small>SELL RISK</small><b>{riskPreview("SELL").plannedRisk==null?"Set valid SL":cash(riskPreview("SELL").plannedRisk)}</b></div>
+                <div><small>BUY RISK</small><b>{riskPreview("BUY").plannedRisk==null?"Set valid SL":cash(riskPreview("BUY").plannedRisk)}</b></div>
+                <div><small>MAX / TRADE</small><b>{cash((me?.equity||0)*(risk?.profile.max_risk_per_trade_pct||0)/100)}</b></div>
+                <div><small>PROJECTED MARGIN</small><b>{Number.isFinite(riskPreview("BUY").projectedMarginPct)?fmt(riskPreview("BUY").projectedMarginPct,1)+"%":"—"}</b></div>
+              </div>
+              {risk?.blocked_reasons?.length?<div className="pretrade-risk-warning">{risk.blocked_reasons.join(" · ")}</div>:(!riskPreview("BUY").validStop||!riskPreview("SELL").validStop)&&risk?.profile.require_stop_loss?<div className="pretrade-risk-warning">Set a valid protective Stop Loss. Planned loss must stay within {fmt(risk.profile.max_risk_per_trade_pct,1)}% of equity.</div>:<div className="pretrade-risk-ok">Server-side risk rules will be checked again when the order is submitted.</div>}
+            </div>
+            <div className="buy-sell-row"><button className="trade-action sell-action" disabled={!canPlace("SELL")} onClick={()=>placeOrder("SELL")}><span>SELL</span><b>{state.quote?fmt(state.quote.bid):"—"}</b><small>{orderType==="MARKET"?"SELL XAUUSD":"PLACE SELL "+orderType}</small></button><button className="trade-action buy-action" disabled={!canPlace("BUY")} onClick={()=>placeOrder("BUY")}><span>BUY</span><b>{state.quote?fmt(state.quote.ask):"—"}</b><small>{orderType==="MARKET"?"BUY XAUUSD":"PLACE BUY "+orderType}</small></button></div>
             {!running&&<div className="trading-state-note">{state.competition.status==="draft"?"Trading unlocks when the administrator starts the 48-hour challenge.":state.competition.is_paused?"Trading is paused by the administrator.":"This competition round has finished."}</div>}<div className="trade-disclaimer">Paper trading only · No broker connected · Prices may be delayed</div>
           </div>}
         </div>}
@@ -150,6 +183,38 @@ export default function Home(){
 
         {tab==="Positions"&&<div className="page-stack"><div className="page-title-row"><div><div className="breadcrumb">ACCOUNT <span>/</span> POSITIONS</div><h1>Positions</h1><p>Open positions and pending orders · only visible to you.</p></div><span className="count-pill">{active.length} ACTIVE</span></div><div className="surface table-surface"><TradeTable trades={active} quote={state.quote} onClose={id=>void doAction({action:"close_trade",trade_id:id},"Position closed.")} onCancel={id=>void doAction({action:"cancel_order",trade_id:id},"Pending order cancelled.")} onModify={modifyTrade} busy={busy}/></div></div>}
         {tab==="History"&&<div className="page-stack"><div className="page-title-row"><div><div className="breadcrumb">ACCOUNT <span>/</span> HISTORY</div><h1>Trade history</h1><p>Private list of your completed and active paper orders.</p></div><select className="filter-select" value={filter} onChange={e=>setFilter(e.target.value as any)}><option value="all">All trades</option><option value="open">Open</option><option value="pending">Pending</option><option value="closed">Closed</option></select></div><div className="surface table-surface"><TradeTable trades={filtered} quote={state.quote} onClose={id=>void doAction({action:"close_trade",trade_id:id},"Position closed.")} onCancel={id=>void doAction({action:"cancel_order",trade_id:id},"Pending order cancelled.")} onModify={modifyTrade} busy={busy}/><div className="history-footer">Closed trades: {closed.length} · Realized P&L: {cash(realized)}</div></div></div>}
+        {tab==="Risk"&&<div className="page-stack risk-page">
+          <div className="page-title-row"><div><div className="breadcrumb">ACCOUNT <span>/</span> RISK MANAGEMENT</div><h1>Risk control centre</h1><p>Server-enforced safeguards for your virtual account.</p></div><span className={cls("state-pill",risk?.can_trade?"running":"completed")}>{risk?.can_trade?"PROTECTED":"ORDERS LOCKED"}</span></div>
+          {risk?.blocked_reasons?.length>0&&<div className="alert warning"><Shield size={15}/><div><b>Trading lock active</b><span>{risk.blocked_reasons.join(" · ")}</span></div></div>}
+          <div className="metrics-grid performance-metrics">
+            <Metric label="DAILY P&L" value={cash(risk?.metrics.daily_pnl)} detail={"Daily loss limit "+cash(risk?.metrics.daily_loss_limit)} positive={(risk?.metrics.daily_pnl||0)>=0} icon={<Activity size={17}/>}/>
+            <Metric label="ACCOUNT P&L" value={cash(risk?.metrics.total_pnl)} detail={"Max loss "+cash(risk?.metrics.total_loss_limit)} positive={(risk?.metrics.total_pnl||0)>=0} icon={<TrendingUp size={17}/>}/>
+            <Metric label="MARGIN UTILIZATION" value={fmt(risk?.metrics.margin_pct||0,1)+"%"} detail={"Limit "+fmt(risk?.profile.max_margin_pct||0,1)+"%"} positive={(risk?.metrics.margin_pct||0)<(risk?.profile.max_margin_pct||0)} icon={<Wallet size={17}/>}/>
+            <Metric label="ACTIVE EXPOSURE" value={fmt(risk?.metrics.total_open_lots||0,3)+" lots"} detail={(risk?.metrics.open_positions||0)+" positions · "+(risk?.metrics.pending_orders||0)+" pending"} icon={<ChartCandlestick size={17}/>}/>
+          </div>
+          <div className="surface risk-rules-card">
+            <div className="panel-heading"><div><h2>Your risk profile</h2><p>Defaults are enforced on the server for every new order.</p></div><Shield size={18} className="gold-text"/></div>
+            <div className="risk-rule-list">
+              <div><span>Maximum risk per trade</span><b>{fmt(risk?.profile.max_risk_per_trade_pct||0,1)}% of equity</b></div>
+              <div><span>Daily loss limit</span><b>{fmt(risk?.profile.max_daily_loss_pct||0,1)}% of starting balance</b></div>
+              <div><span>Maximum total loss</span><b>{fmt(risk?.profile.max_total_drawdown_pct||0,1)}% of starting balance</b></div>
+              <div><span>Maximum active positions / orders</span><b>{risk?.profile.max_open_positions||0}</b></div>
+              <div><span>Maximum total active volume</span><b>{fmt(risk?.profile.max_total_lots||0,3)} lots</b></div>
+              <div><span>Maximum margin utilization</span><b>{fmt(risk?.profile.max_margin_pct||0,1)}%</b></div>
+              <div><span>Stop Loss protection</span><b>{risk?.profile.require_stop_loss?"Required on every order":"Optional"}</b></div>
+              <div><span>Daily reset timezone</span><b>{risk?.day_reset_timezone||"UTC"}</b></div>
+            </div>
+          </div>
+          <div className="surface risk-rules-card">
+            <div className="panel-heading"><div><h2>How order protection works</h2><p>Risk checks run on the backend, not just in this interface.</p></div></div>
+            <div className="risk-guidance">
+              <p><b>Before entry:</b> planned loss at Stop Loss is calculated from the XAUUSD contract size and lot volume.</p>
+              <p><b>At submission:</b> the server checks per-trade risk, daily loss, total loss, active order count, total lots and projected margin.</p>
+              <p><b>When a limit is reached:</b> new orders are blocked and the event is written to the private risk audit log. Existing positions are not automatically liquidated.</p>
+              <p><b>Daily accounting:</b> realized P&L closed since 00:00 UTC plus current floating P&L is used for the daily loss check.</p>
+            </div>
+          </div>
+        </div>}
         {tab==="Journal"&&<div className="page-stack journal-page">
           <div className="page-title-row"><div><div className="breadcrumb">PRIVATE WORKSPACE <span>/</span> JOURNAL</div><h1>Trading journal</h1><p>Review your decisions, record your setups and learn from every trade.</p></div><span className="period-pill">{journalEntries.length} ENTRIES</span></div>
           <div className="journal-grid">

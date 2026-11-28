@@ -1,0 +1,19 @@
+{
+  "name": "Zuperior Trading Arena",
+  "short_name": "Zuperior",
+  "description": "Private XAUUSD paper trading arena",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#090b10",
+  "theme_color": "#090b10",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

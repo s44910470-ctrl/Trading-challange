@@ -255,11 +255,39 @@ async function loadCandles(timeframe: string) {
   return { candles: [...buckets.values()].sort((a,b) => a.ms - b.ms).slice(-300), source: "XAUS 5-minute reference samples", timeframe };
 }
 
+function readSecretKey() {
+  const modern = Deno.env.get("SUPABASE_SECRET_KEYS");
+  if (modern) {
+    try {
+      const keys = JSON.parse(modern);
+      if (typeof keys.default === "string" && keys.default.length > 0) return keys.default;
+    } catch {
+      // Fall back to the legacy server-side key below.
+    }
+  }
+  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+}
+function createAdminClient(url: string, key: string) {
+  return createClient(url, key, {
+    auth: { persistSession: false },
+    global: {
+      fetch: async (input, init = {}) => {
+        const headers = new Headers(init.headers);
+        headers.set("apikey", key);
+        // Modern sb_secret keys are API keys, not JWTs. Supabase requires them
+        // on apikey only; remove the default Bearer header from supabase-js.
+        if (key.startsWith("sb_secret_")) headers.delete("Authorization");
+        return fetch(input, { ...init, headers });
+      },
+    },
+  });
+}
+
 Deno.serve(async req => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return reply({ error: "POST required" }, 405);
   const url = Deno.env.get("SUPABASE_URL");
-  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const key = readSecretKey();
   if (!url || !key) return reply({ error: "Backend is not configured" }, 500);
   let body: any;
   try {
@@ -269,7 +297,7 @@ Deno.serve(async req => {
   } catch { return reply({ error: "Invalid JSON" }, 400); }
   const code = (req.headers.get("x-arena-code") || body.invite_code || "").trim();
   if (code.length < 32 || code.length > 128) return reply({ error: "Enter a valid invite code" }, 401);
-  const db = createClient(url, key, { auth: { persistSession: false } });
+  const db = createAdminClient(url, key);
   const { data: credential, error: credentialError } = await db.from("arena_credentials")
     .select("id,participant_id,role").eq("token_hash", await sha256(code)).is("revoked_at", null).maybeSingle();
   if (credentialError || !credential) return reply({ error: "Invite code is invalid or revoked" }, 401);

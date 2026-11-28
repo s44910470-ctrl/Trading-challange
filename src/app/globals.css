@@ -94,3 +94,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .quick-trade-controls{display:flex;align-items:center;gap:9px}.quick-volume{display:flex;align-items:center;gap:7px}.quick-volume>small{font-size:7px;letter-spacing:.12em;color:var(--muted);font-weight:850}.quick-volume .volume-control{width:112px;height:30px;margin:0}.quick-volume .volume-control button{font-size:14px}.quick-volume .volume-control input{font-size:10px}
 @media(max-width:680px){.quick-trade-controls{gap:5px}.quick-volume{gap:4px}.quick-volume>small{font-size:6px}.quick-volume .volume-control{width:88px;height:28px}.quick-volume .volume-control button{font-size:13px}.options-toggle{font-size:0;gap:3px}.options-toggle svg{width:14px;height:14px}.options-toggle svg:last-child{display:none}.quick-trade-top>div.quick-trade-controls{display:flex;align-items:center}.quick-trade-top>div.quick-volume{display:flex}}
 @media(max-width:380px){.quick-volume .volume-control{width:78px}.quick-trade-controls{gap:4px}}
+
+
+@media(max-width:900px){.terminal-chart-card{height:calc(100svh - 285px);min-height:350px}.chart-canvas{min-height:0;flex:1}.chart-canvas .tv-frame,.chart-canvas>.chart-svg{height:100%;min-height:0}}
+@media(max-width:680px){.terminal-chart-card{height:calc(100svh - 245px);min-height:345px}.chart-canvas{min-height:0}.chart-canvas .tv-frame,.chart-canvas>.chart-svg{min-height:0;height:100%}}
+@media(max-width:380px){.terminal-chart-card{height:calc(100svh - 235px)}}

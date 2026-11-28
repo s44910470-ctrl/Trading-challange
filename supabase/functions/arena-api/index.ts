@@ -422,15 +422,34 @@ Deno.serve(async req => {
 
       const stop = body.stop_loss === "" || body.stop_loss == null ? null : number(body.stop_loss, "stop loss");
       const take = body.take_profit === "" || body.take_profit == null ? null : number(body.take_profit, "take profit");
-      const referencePrice = Number(trade.status === "pending" ? trade.trigger_price : trade.entry_price);
+      let trigger: number | null = null;
+      let referencePrice = Number(trade.entry_price);
+      if (trade.status === "pending") {
+        const quote = await getQuote(db);
+        if (!quote || quote.is_stale) return reply({ error: "A fresh gold quote is required to modify a pending order." }, 503);
+        trigger = body.trigger_price === "" || body.trigger_price == null
+          ? Number(trade.trigger_price)
+          : number(body.trigger_price, "trigger price");
+        if (!Number.isFinite(trigger) || trigger <= 0) return reply({ error: "Enter a valid pending-order price." }, 400);
+        if (trade.order_type === "LIMIT" && ((trade.side === "BUY" && trigger >= quote.mid) || (trade.side === "SELL" && trigger <= quote.mid))) {
+          return reply({ error: "Limit price is on the wrong side of the current market." }, 400);
+        }
+        if (trade.order_type === "STOP" && ((trade.side === "BUY" && trigger <= quote.mid) || (trade.side === "SELL" && trigger >= quote.mid))) {
+          return reply({ error: "Stop price is on the wrong side of the current market." }, 400);
+        }
+        referencePrice = trigger;
+      }
       if (stop !== null && ((trade.side === "BUY" && stop >= referencePrice) || (trade.side === "SELL" && stop <= referencePrice))) {
         return reply({ error: "Stop Loss must be below a Buy entry and above a Sell entry." }, 400);
       }
       if (take !== null && ((trade.side === "BUY" && take <= referencePrice) || (trade.side === "SELL" && take >= referencePrice))) {
         return reply({ error: "Take Profit must be above a Buy entry and below a Sell entry." }, 400);
       }
+      const updatePayload = trade.status === "pending"
+        ? { stop_loss: stop, take_profit: take, trigger_price: trigger }
+        : { stop_loss: stop, take_profit: take };
       const { data: updated, error: updateError } = await db.from("paper_trades")
-        .update({ stop_loss: stop, take_profit: take })
+        .update(updatePayload)
         .eq("id", tradeId).eq("participant_id", member.participant_id)
         .in("status", ["open", "pending"]).select("id").maybeSingle();
       if (updateError) throw updateError;

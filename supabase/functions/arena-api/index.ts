@@ -641,8 +641,7 @@ Deno.serve(async req => {
         .in("status", ["open", "pending"]).is("archived_at", null);
       if (activeError) throw activeError;
       const openCount = (active || []).filter((t: any) => t.status === "open").length;
-      const pendingCount = (active || []).filter((t: any) => t.status === "pending").length;
-      const activeCount = openCount + pendingCount;
+      const activeCount = (active || []).length;
       const activeLots = (active || []).reduce((sum: number, t: any) => sum + Number(t.lots), 0);
       const currentFloating = (active || []).filter((t: any) => t.status === "open")
         .reduce((sum: number, t: any) => sum + (t.entry_price == null ? 0 : unrealized(t, quote)), 0);
@@ -669,10 +668,10 @@ Deno.serve(async req => {
           { total_pnl: totalPnl, max_loss: totalLossCap });
         return reply({ error: "Maximum account drawdown reached. New orders are locked for this round." }, 403);
       }
-      if (openCount >= Number(riskProfile.max_open_positions)) {
+      if (activeCount >= Number(riskProfile.max_open_positions)) {
         await recordRiskEvent(db, member.participant_id, competition.id, "max_open_positions",
-          "Order rejected because the maximum open position count was reached.",
-          { open_positions: openCount, max_open_positions: riskProfile.max_open_positions });
+          "Order rejected because the maximum active order count was reached.",
+          { open_positions: openCount, active_orders: activeCount, max_open_positions: riskProfile.max_open_positions });
         return reply({ error: "Maximum open position count reached." }, 400);
       }
       if (activeLots + lots > Number(riskProfile.max_total_lots) + 0.000001) {

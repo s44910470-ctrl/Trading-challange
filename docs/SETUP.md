@@ -17,13 +17,13 @@ values ('Zuperior Trading Arena - 1v1 Demo Challenge')
 returning id;
 ```
 
-Use the returned UUID to create the two participants. Replace the login placeholders with each trader's numeric MT5 login. Server name must match MT5 exactly.
+Use the returned UUID to create the two participants. Replace the login placeholders with each trader's numeric Exness MT5 demo login. The expected server must exactly match the server displayed in the Exness Personal Area (the current challenge uses Exness-MT5Trial16).
 ```sql
 insert into public.participants
   (competition_id, display_name, expected_login, expected_server, starting_balance)
 values
-  ('YOUR_COMPETITION_UUID', 'You', 'YOUR_MT5_LOGIN', 'ZuperiorFX-Limited', 50),
-  ('YOUR_COMPETITION_UUID', 'Friend', 'FRIEND_MT5_LOGIN', 'ZuperiorFX-Limited', 50)
+  ('YOUR_COMPETITION_UUID', 'You', 'YOUR_MT5_LOGIN', 'Exness-MT5Trial16', 50),
+  ('YOUR_COMPETITION_UUID', 'Friend', 'FRIEND_MT5_LOGIN', 'Exness-MT5Trial16', 50)
 returning id, display_name;
 ```
 
@@ -32,7 +32,7 @@ Generate a different long random token for each participant on your own computer
 ```powershell
 [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
 ```
-Keep each raw token private. In SQL Editor, store only its SHA-256 hash. Use this template separately for each participant:
+Keep each raw token private. In SQL Editor, store only its SHA-256 hash. The current competition already has separate tokens stored for each participant; do not run the insert again unless rotating tokens. Use this template only when creating a new connection:
 ```sql
 insert into public.connector_tokens (participant_id, token_hash, label)
 values ('PARTICIPANT_UUID', encode(digest('PASTE_RAW_TOKEN_HERE', 'sha256'), 'hex'), 'Windows MT5 connector');

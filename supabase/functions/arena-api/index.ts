@@ -315,6 +315,129 @@ Deno.serve(async req => {
       return reply(action === "quote" ? { quote: state.quote, server_time: state.server_time } : state);
     }
 
+    if (action === "journal_list") {
+      if (member.role !== "participant" || !member.participant_id) return reply({ error: "Participant invite required" }, 403);
+      const { data, error } = await db.from("trading_journal").select("*")
+        .eq("participant_id", member.participant_id)
+        .order("trade_date", { ascending: false }).limit(100);
+      if (error) throw error;
+      return reply({ entries: data || [] });
+    }
+
+    if (action === "journal_create" || action === "journal_update" || action === "journal_delete") {
+      if (member.role !== "participant" || !member.participant_id) return reply({ error: "Participant invite required" }, 403);
+
+      const journalId = String(body.id || "");
+      if (action === "journal_delete") {
+        if (!journalId) return reply({ error: "Journal entry ID is required" }, 400);
+        const { data, error } = await db.from("trading_journal").delete()
+          .eq("id", journalId).eq("participant_id", member.participant_id).select("id").maybeSingle();
+        if (error) throw error;
+        if (!data) return reply({ error: "Journal entry not found" }, 404);
+        return reply({ ok: true, deleted_id: data.id });
+      }
+
+      if (action === "journal_update") {
+        if (!journalId) return reply({ error: "Journal entry ID is required" }, 400);
+        const { data: existing, error: findError } = await db.from("trading_journal").select("id")
+          .eq("id", journalId).eq("participant_id", member.participant_id).maybeSingle();
+        if (findError) throw findError;
+        if (!existing) return reply({ error: "Journal entry not found" }, 404);
+      }
+
+      const title = String(body.title || "").trim();
+      if (!title || title.length > 120) return reply({ error: "Title must be between 1 and 120 characters" }, 400);
+      const direction = String(body.direction || "NO_TRADE").toUpperCase();
+      if (!["BUY", "SELL", "NO_TRADE"].includes(direction)) return reply({ error: "Choose Buy, Sell or No trade" }, 400);
+      const timeframe = String(body.timeframe || "5m");
+      if (!["1m", "5m", "15m", "30m", "1h", "4h", "1d"].includes(timeframe)) return reply({ error: "Unsupported timeframe" }, 400);
+      const outcome = String(body.outcome || "NO_TRADE").toUpperCase();
+      if (!["WIN", "LOSS", "BREAKEVEN", "NO_TRADE"].includes(outcome)) return reply({ error: "Unsupported trade outcome" }, 400);
+      const score = body.discipline_score === "" || body.discipline_score == null ? null : Number(body.discipline_score);
+      if (score !== null && (!Number.isInteger(score) || score < 1 || score > 5)) return reply({ error: "Discipline score must be from 1 to 5" }, 400);
+
+      const nullablePrice = (value: unknown, label: string) => value === "" || value == null ? null : number(value, label);
+      const rawMistakes = Array.isArray(body.mistakes) ? body.mistakes : String(body.mistakes || "").split(",");
+      const mistakes = rawMistakes.map((v: unknown) => String(v).trim().slice(0, 60)).filter(Boolean).slice(0, 8);
+      const chartImageUrl = String(body.chart_image_url || "").trim();
+      if (chartImageUrl && (!/^https?:\/\//i.test(chartImageUrl) || chartImageUrl.length > 1000)) {
+        return reply({ error: "Chart image must be a valid http(s) URL" }, 400);
+      }
+
+      let paperTradeId: string | null = body.paper_trade_id ? String(body.paper_trade_id) : null;
+      let competitionId: string | null = null;
+      if (paperTradeId) {
+        const { data: linkedTrade, error: tradeError } = await db.from("paper_trades").select("id,competition_id")
+          .eq("id", paperTradeId).eq("participant_id", member.participant_id).maybeSingle();
+        if (tradeError) throw tradeError;
+        if (!linkedTrade) return reply({ error: "Linked trade not found in your account" }, 404);
+        competitionId = linkedTrade.competition_id;
+      } else {
+        const competition = await getCompetition(db);
+        competitionId = competition.id;
+      }
+
+      const tradeDate = body.trade_date ? new Date(String(body.trade_date)) : new Date();
+      if (!Number.isFinite(tradeDate.getTime())) return reply({ error: "Invalid journal date" }, 400);
+      const payload = {
+        participant_id: member.participant_id,
+        competition_id: competitionId,
+        paper_trade_id: paperTradeId,
+        title,
+        market: String(body.market || "XAUUSD").trim().slice(0, 30) || "XAUUSD",
+        direction,
+        timeframe,
+        strategy: String(body.strategy || "").trim().slice(0, 100),
+        setup: String(body.setup || "").trim().slice(0, 120),
+        trade_date: tradeDate.toISOString(),
+        entry_price: nullablePrice(body.entry_price, "entry price"),
+        exit_price: nullablePrice(body.exit_price, "exit price"),
+        stop_loss: nullablePrice(body.stop_loss, "stop loss"),
+        take_profit: nullablePrice(body.take_profit, "take profit"),
+        outcome,
+        emotion: String(body.emotion || "").trim().slice(0, 80),
+        discipline_score: score,
+        mistakes,
+        notes: String(body.notes || "").trim().slice(0, 6000),
+        chart_image_url: chartImageUrl || null,
+        updated_at: new Date().toISOString(),
+      };
+
+      const query = action === "journal_create"
+        ? db.from("trading_journal").insert(payload).select("*").single()
+        : db.from("trading_journal").update(payload).eq("id", journalId)
+            .eq("participant_id", member.participant_id).select("*").single();
+      const { data, error } = await query;
+      if (error) throw error;
+      return reply({ ok: true, entry: data });
+    }
+
+    if (action === "modify_trade") {
+      if (member.role !== "participant" || !member.participant_id) return reply({ error: "Participant invite required" }, 403);
+      const tradeId = String(body.trade_id || "");
+      const { data: trade, error: tradeError } = await db.from("paper_trades").select("*")
+        .eq("id", tradeId).eq("participant_id", member.participant_id).is("archived_at", null).maybeSingle();
+      if (tradeError) throw tradeError;
+      if (!trade || !["open", "pending"].includes(trade.status)) return reply({ error: "Only your open positions or pending orders can be modified" }, 404);
+
+      const stop = body.stop_loss === "" || body.stop_loss == null ? null : number(body.stop_loss, "stop loss");
+      const take = body.take_profit === "" || body.take_profit == null ? null : number(body.take_profit, "take profit");
+      const referencePrice = Number(trade.status === "pending" ? trade.trigger_price : trade.entry_price);
+      if (stop !== null && ((trade.side === "BUY" && stop >= referencePrice) || (trade.side === "SELL" && stop <= referencePrice))) {
+        return reply({ error: "Stop Loss must be below a Buy entry and above a Sell entry." }, 400);
+      }
+      if (take !== null && ((trade.side === "BUY" && take <= referencePrice) || (trade.side === "SELL" && take >= referencePrice))) {
+        return reply({ error: "Take Profit must be above a Buy entry and below a Sell entry." }, 400);
+      }
+      const { data: updated, error: updateError } = await db.from("paper_trades")
+        .update({ stop_loss: stop, take_profit: take })
+        .eq("id", tradeId).eq("participant_id", member.participant_id)
+        .in("status", ["open", "pending"]).select("id").maybeSingle();
+      if (updateError) throw updateError;
+      if (!updated) return reply({ error: "Trade changed before the update completed" }, 409);
+      return reply({ ok: true, state: await buildState(db, member) });
+    }
+
     if (action === "place_order") {
       if (member.role !== "participant" || !member.participant_id) return reply({ error: "Participant invite required to trade" }, 403);
       const competition = await getCompetition(db);
